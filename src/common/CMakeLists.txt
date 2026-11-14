@@ -12,6 +12,7 @@ add_library(venture_common STATIC
   search.cpp
   ipc.cpp
   launch_details.cpp
+  multiplayer/diagnostics.cpp
   startup_progress.cpp
   http/client.cpp
   meta/auth.cpp

@@ -3,6 +3,7 @@
 #include "common/log.h"
 #include "common/paths.h"
 #include "common/launch_details.h"
+#include "common/multiplayer/diagnostics.h"
 #include "core/process_image.h"
 #include "core/engine_defaults.h"
 #include "core/renderer_capabilities.h"
@@ -88,6 +89,11 @@ std::unique_ptr<venture::ovrplatform::Session> register_libraries(const std::fil
   identity.package = config.package;
   identity.version_code = config.version_code;
   if (!game.empty()) identity = venture::ovrplatform::read_app_identity(game / "plan.json", config.package, config.version_code);
+  // One multiplayer record per launch: which Quest platform multiplayer calls
+  // the game made, and what its own networking did. Redacted by construction and
+  // written beside the launcher's data files for the debug report.
+  venture::multiplayer::begin_run(identity.package, identity.app_id, identity.version_name,
+                                  venture::paths::data_dir());
   auto session = venture::ovrplatform::make_runtime_session(identity, game, broker);
   venture::ovrplatform::register_library(*session, venture::ovrplatform::microphone_exports());
   // app_process, the linker and system libraries as tools on a device find them.

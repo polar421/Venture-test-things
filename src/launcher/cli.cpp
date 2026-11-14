@@ -57,7 +57,12 @@ Library
   builds GAME [--as ACCOUNT]     Every version you can install, with its version
                                  code, binary id and release channels
   uninstall GAME [--yes]         Remove a game's files; saves are kept
-  play GAME [--as ACCOUNT|local] Launch a game and wait for it to exit
+  play GAME [--as ACCOUNT|local] [--deeplink URL] [--lobby ID] [--match ID]
+                                 Launch a game and wait for it to exit. With
+                                 --deeplink, --lobby or --match it starts in
+                                 an existing session (a Quest player's
+                                 invitation or the game's share link), and the
+                                 game joins it through its own networking
   logs GAME [--lines N]          The end of a game's last runtime log
   report [GAME] [--upload]       Write a debug report about a game's last run
                                  (the most recent one by default): what happened,
@@ -135,8 +140,9 @@ struct Args {
 };
 
 Args parse(const std::vector<std::string> &argv) {
-  static const std::set<std::string> with_value{"--as",   "--to",   "--search", "--serial",
-                                                "--lines", "--only", "--from",   "--build", "--language"};
+  static const std::set<std::string> with_value{"--as",     "--to",     "--search", "--serial",
+                                                "--lines",  "--only",   "--from",   "--build",
+                                                "--language", "--deeplink", "--lobby", "--match"};
   static const std::set<std::string> known{"--json",   "--offline", "--yes",          "-y",
                                            "--all",    "--installed", "--delete-saves", "--headset",
                                            "--help",   "-h",        "--version",      "--manual",
@@ -899,7 +905,15 @@ int Cli::play_game(const Args &args) {
   std::string key = play_key(g.id);
   if (auto as = args.value("--as"))
     key = resolve_account(*as, true);
-  launch_game(g.id, key, {});
+  // A session handed in from elsewhere: the ids a Quest player's invitation
+  // carries or the deep link the game shares. The game receives them through
+  // the ordinary launch details and joins with its own networking; Venture
+  // neither proxies nor fabricates the session.
+  const auto deeplink = args.value("--deeplink").value_or("");
+  const auto lobby = args.value("--lobby").value_or("");
+  const auto match = args.value("--match").value_or("");
+  const auto details = session_launch_details(deeplink, lobby, match);
+  launch_game(g.id, key, details);
   if (!json_)
     std::cout << "Starting " << g.name << "\n" << std::flush;
   wait([&] { return !launch_pending_.contains(g.id); });

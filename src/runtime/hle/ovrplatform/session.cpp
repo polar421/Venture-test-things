@@ -1,5 +1,6 @@
 #include "hle/ovrplatform/session.h"
 #include "hle/ovrplatform/social.h"
+#include "common/multiplayer/diagnostics.h"
 
 #include <bit>
 #include <chrono>
@@ -27,6 +28,23 @@ constexpr RequestSpec requests[] = {
 #include "hle/ovrplatform/requests.inc"
 #undef VENTURE_REQUEST
 };
+// A fixed outcome name for the multiplayer diagnostics; never server text.
+const char* error_category(ErrorCode code) {
+  switch (code) {
+    case ErrorCode::none: return "none";
+    case ErrorCode::unsupported: return "unsupported";
+    case ErrorCode::unauthenticated: return "unauthenticated";
+    case ErrorCode::not_entitled: return "not_entitled";
+    case ErrorCode::unavailable: return "unavailable";
+    case ErrorCode::invalid_response: return "invalid_response";
+    case ErrorCode::identity_mismatch: return "identity_mismatch";
+    case ErrorCode::cancelled: return "cancelled";
+    case ErrorCode::uninitialized: return "uninitialized";
+    case ErrorCode::incomplete: return "incomplete";
+    case ErrorCode::invalid_argument: return "invalid_argument";
+  }
+  return "unknown";
+}
 enum class Kind { message, error, init, options, model };
 struct Field {
   GetterType type;
@@ -184,6 +202,7 @@ struct Session::Impl {
     RequestArgs args;
     HandlerSpec handler;
     bool host = false;
+    bool implemented = false;  // the emulator handles this call (diagnostics only)
   };
   struct Pending {
     std::uint32_t type;
@@ -414,6 +433,12 @@ struct Session::Impl {
     else
       log::debug("ovrplatform", "{} request={} type={:#x} completed", job.name,
                  job.id, job.type);
+    // What the game tried to do with Quest multiplayer, and what it got. The
+    // recorder keeps only the operation, a fixed outcome category and whether
+    // it is how a game joins a session; never an argument or a response.
+    multiplayer::note_platform_call(job.name, job.implemented, !result.error,
+                                    error_category(result.error.code),
+                                    multiplayer::session_intent(job.name));
     if (job.name == "ovr_User_GetUserProof") {
       milestone::mark("platform_proof_ready");
       log::info("ovrplatform", "User proof request={} ready after={}ms error={}",
@@ -696,6 +721,7 @@ Request Session::enqueue(const RequestSpec& spec, RequestArgs args, bool host) {
   impl_->startup_issue(job);
   auto handler = impl_->handlers.find(job.name);
   const bool supported = handler != impl_->handlers.end() || Impl::local(job.name);
+  job.implemented = supported;
   if (handler != impl_->handlers.end()) job.handler = handler->second;
   if (impl_->state == Impl::State::shutdown)
     impl_->finish(job, {failure(ErrorCode::cancelled)});
@@ -899,6 +925,10 @@ void Session::set_launch_details(const LaunchDetails& details) {
   if (impl_->launch || impl_->state == Impl::State::shutdown)
     throw std::logic_error("Launch details already borrowed or session closed");
   impl_->launch_info = checked;
+  // Shape only: the ids and the deep link text stay with the game.
+  multiplayer::note_launch_details(checked.type, !checked.deeplink.empty(),
+                                   !checked.lobby.empty(), !checked.match.empty(),
+                                   !checked.destination.empty(), checked.source);
 }
 void Session::attach_launcher(std::shared_ptr<PipeChannel> channel) {
   if (!channel) throw std::invalid_argument("Missing launcher channel");

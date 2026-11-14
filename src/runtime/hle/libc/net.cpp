@@ -5,6 +5,7 @@
 #include "core/signals.h"
 #include "common/environment.h"
 #include "common/log.h"
+#include "common/multiplayer/diagnostics.h"
 #include <algorithm>
 #include <bit>
 #include <climits>
@@ -569,13 +570,29 @@ std::shared_ptr<SocketFile> socket_file(int fd) {
   return std::dynamic_pointer_cast<SocketFile>(FdTable::get().file(fd));
 }
 int socket_error(int fd) { return failure(FdTable::get().file(fd) ? err::enotsock : err::ebadf); }
+// Guest sockaddr family (2 = AF_INET, 10 = AF_INET6); 0 when unreadable.
+int address_family(const void* a, std::uint32_t n) {
+  if (!a || n < 2) return 0;
+  const auto* b = static_cast<const unsigned char*>(a);
+  return b[0] | (b[1] << 8);
+}
+// A fixed category for the multiplayer diagnostics; never an address or text.
+const char* connect_category(int code) {
+  if (!code) return "connected";
+  if (code == -err::etimedout) return "timeout";
+  if (code == -err::econnrefused) return "refused";
+  if (code == -err::ehostunreach || code == -err::enetunreach) return "unreachable";
+  return "error";
+}
 int socket_fn(int family, int type, int protocol) {
   int error;
   auto f = host::socket(family, type & 0xf, protocol, &error);
   if (!f) return result(error);
   if (type & ~(0xf | o_cloexec | o_nonblock)) return failure(err::einval);
   f->flags = 2 | (type & o_nonblock);
-  return result(FdTable::get().insert(f, 0, type & o_cloexec));
+  const int fd = FdTable::get().insert(f, 0, type & o_cloexec);
+  if (fd >= 0) multiplayer::note_socket(family, type & 0xf);
+  return result(fd);
 }
 int bind_fn(int fd, const void* addr, std::uint32_t size) {
   auto f = socket_file(fd);
@@ -588,19 +605,25 @@ int listen_fn(int fd, int backlog) {
 int connect_fn(int fd, const void* a, std::uint32_t n) {
   auto f = socket_file(fd);
   if (!f) return socket_error(fd);
+  // Every path records one connection attempt for the multiplayer report; a
+  // non-blocking connect that is still in progress records its final result.
+  auto finish = [&](int code) {
+    multiplayer::note_connect(address_family(a, n), code == 0, connect_category(code));
+    return result(code);
+  };
   int r = f->connect(a, n);
   if (trace_net) log::info("net-trace", "connect fd={} {} -> {}", fd, trace_address(a, n), r);
-  if (r != -err::einprogress || (f->flags.load() & o_nonblock)) return result(r);
+  if (r != -err::einprogress || (f->flags.load() & o_nonblock)) return finish(r);
   auto end = f->operation_deadline(true);
   while (!(f->ready(poll_out) & (poll_out | poll_err | poll_hup))) {
     r = f->wait_ready(poll_out, end);
     if (r == -err::eagain) r = -err::einprogress;
-    if (r) return result(r);
+    if (r) return finish(r);
   }
   int error = 0;
   std::uint32_t size = 4;
   r = f->option(false, 1, 4, &error, &size);
-  return result(r ? r : -error);
+  return finish(r ? r : -error);
 }
 int accept4_fn(int fd, void* a, std::uint32_t* n, int flags) {
   if (flags & ~(o_cloexec | o_nonblock)) return failure(err::einval);
@@ -629,6 +652,10 @@ std::int64_t sendto_fn(int fd, const void* p, std::uint64_t n, int flags, const 
     auto r = f->send(p, n, flags | 0x40, a, size);
     if (trace_net && r != -err::eagain) log::info("net-trace", "send fd={} n={} -> {}", fd, n, r);
     if (r != -err::eagain || ((f->flags.load() & o_nonblock) || (flags & 0x40))) {
+      if (r == -err::epipe || r == -err::econnreset)
+        multiplayer::note_disconnect("write_closed");
+      else if (r != -err::eagain)
+        multiplayer::note_network_error("send_failed");
       if (r == -err::epipe && !(flags & 0x4000))
         signals::send_to_thread(GuestThread::current()->tid(), {.signo = 13});
       return result(r);
@@ -655,7 +682,11 @@ std::int64_t recvfrom_fn(int fd, void* p, std::uint64_t n, int flags, void* a,
       if (!waitall || done == n || (f->flags.load() & o_nonblock) || (flags & 0x40)) return done;
       continue;
     }
-    if (!r) return done;
+    if (!r) {
+      // A stream's EOF is the peer closing; an empty datagram is not.
+      if (type == 1) multiplayer::note_disconnect("peer_closed");
+      return done;
+    }
     if (r != -err::eagain || (f->flags.load() & o_nonblock) || (flags & 0x40))
       return done ? static_cast<std::int64_t>(done) : result(r);
     int e = f->wait_ready(poll_in, end);
@@ -730,6 +761,7 @@ int getaddrinfo_fn(const char* node, const char* service, const Addrinfo* hints,
   std::vector<host::Lookup> entries;
   int r = lookup_interruptible(node, service, hints ? hints->family : 0, hints ? hints->type : 0,
                                hints ? hints->protocol : 0, hints ? hints->flags : 0, entries);
+  multiplayer::note_dns(r == 0, hints ? hints->family : 0);
   if (trace_net)
     log::info("net-trace", "getaddrinfo {} {} -> {} entries={}", node ? node : "(null)",
               service ? service : "(null)", r, entries.size());

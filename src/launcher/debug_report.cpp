@@ -1118,6 +1118,21 @@ fs::path write_debug_report(const DebugReport &request) {
   environment_section(out);
   out += "\n=== Settings for this game ===\n";
   settings_section(out, request.data, request.app_id);
+  // What the game asked Quest multiplayer for and what its own networking did.
+  // The runtime records only operation names, fixed outcome categories, socket
+  // families and booleans, so this section never carries a token, user proof,
+  // address, session id or payload.
+  {
+    std::string text = read_file(request.data / "multiplayer-diagnostics.json");
+    if (!text.empty()) {
+      out += "\n=== Multiplayer diagnostics (last run) ===\n";
+      out += "Platform multiplayer calls the game made, and its socket activity.\n";
+      out += "No credentials, payloads, addresses or session ids are recorded.\n";
+      if (text.size() > (32 << 10)) text.resize(32 << 10);
+      out += text;
+      if (text.back() != '\n') out += '\n';
+    }
+  }
   for (const char *name : {"settings.json", "host-displays.json", "passthrough.json"}) {
     std::string text = read_file(request.data / name);
     if (text.empty()) continue;

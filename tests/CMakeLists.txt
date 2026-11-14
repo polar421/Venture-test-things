@@ -655,7 +655,8 @@ if(TARGET venture_android)
 endif()
 
 target_sources(venture_tests PRIVATE runtime/ovrplatform_test.cpp runtime/ovrplatform_http_test.cpp
-  runtime/ovrplatform_presence_test.cpp runtime/assetfile_test.cpp runtime/horizon_test.cpp)
+  runtime/ovrplatform_presence_test.cpp runtime/ovrplatform_launch_details_test.cpp
+  runtime/multiplayer_diagnostics_test.cpp runtime/assetfile_test.cpp runtime/horizon_test.cpp)
 target_link_libraries(venture_tests PRIVATE venture_ovrplatform)
 
 target_compile_definitions(venture_tests PRIVATE VENTURE_OVR_PLAN_FIXTURE="${CMAKE_CURRENT_BINARY_DIR}/ovrplatform-plan-test.json")

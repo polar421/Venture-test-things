@@ -30,6 +30,35 @@ TEST_CASE("Launcher pipe preserves deeplinks across an inherited child process")
   venture::fs::remove(log);
 }
 
+TEST_CASE("A session launch carries only the invitation it was given") {
+  const auto invite = venture::session_launch_details("", "lobby-1", "");
+  CHECK(invite.type == 2);  // OVR_LaunchType.h Invite
+  CHECK(invite.source == "invite");
+  CHECK(invite.lobby == "lobby-1");
+  CHECK(invite.match.empty());
+  CHECK(invite.deeplink.empty());
+
+  // An invitation also carries a deep link message; the type stays Invite,
+  // because the game branches on it to decide it is joining a session.
+  const auto invited = venture::session_launch_details("room=7", "lobby-1", "match-2");
+  CHECK(invited.type == 2);
+  CHECK(invited.deeplink == "room=7");
+  CHECK(invited.lobby == "lobby-1");
+  CHECK(invited.match == "match-2");
+
+  const auto link = venture::session_launch_details("game://join?room=7", "", "");
+  CHECK(link.type == 4);  // Deeplink: Application_LaunchOtherApp
+  CHECK(link.deeplink == "game://join?room=7");
+  CHECK(link.source == "invite");
+
+  const auto plain = venture::session_launch_details("", "", "");
+  CHECK(plain.type == 1);  // Normal, a library launch
+  CHECK(plain.source == "library");
+
+  // The launch channel's bound applies before anything reaches the runtime.
+  CHECK_THROWS(venture::session_launch_details(std::string(4097, 'x'), "", ""));
+}
+
 TEST_CASE("Launcher frames reject malformed and oversized details") {
   auto json = venture::launch_details_json({});
   json["type"] = 99;
