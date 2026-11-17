@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include <thread>
 using namespace venture;
 using namespace venture::hle::libc;
@@ -63,6 +64,60 @@ TEST_CASE(
   CHECK(call("munmap", {static_cast<GuestAddr>(readonly), 8192}) == 0);
   CHECK(call("close", {static_cast<std::uint64_t>(fd)}) == 0);
   CHECK(call("unlink", {h2g(path.c_str())}) == 0);
+}
+
+TEST_CASE("libc B: posix_fallocate extends a writable file and rejects read-only descriptors") {
+  Thread thread;
+  const auto path = process_config().guest_data_dir() + "/posix-fallocate.bin";
+  struct Cleanup {
+    std::string path;
+    ~Cleanup() { call("unlink", {h2g(path.c_str())}); }
+  } cleanup{path};
+  const auto fd = call("open", {h2g(path.c_str()), 0100 | 01000 | 2, 0600});
+  REQUIRE(fd >= 0);
+  std::array<unsigned char, 8192> initial{};
+  for (std::size_t i = 0; i < initial.size(); ++i) initial[i] = static_cast<unsigned char>((i * 37 + 11) & 0xff);
+  REQUIRE(call("pwrite", {static_cast<std::uint64_t>(fd), h2g(initial.data()),
+                         static_cast<std::uint64_t>(initial.size()), 0}) ==
+          static_cast<std::int64_t>(initial.size()));
+  CHECK(call("posix_fallocate", {static_cast<std::uint64_t>(fd), 0, 16384}) == 0);
+  Stat stat{};
+  REQUIRE(call("fstat", {static_cast<GuestAddr>(fd), h2g(&stat)}) == 0);
+  CHECK(stat.size == 16384);
+  std::array<unsigned char, 8192> contents{};
+  REQUIRE(call("pread", {static_cast<std::uint64_t>(fd), h2g(contents.data()),
+                         static_cast<std::uint64_t>(contents.size()), 0}) ==
+          static_cast<std::int64_t>(contents.size()));
+  CHECK(contents == initial);
+  // An allocation wholly inside the current size succeeds without truncating.
+  CHECK(call("posix_fallocate", {static_cast<std::uint64_t>(fd), 4096, 64}) == 0);
+  REQUIRE(call("fstat", {static_cast<GuestAddr>(fd), h2g(&stat)}) == 0);
+  CHECK(stat.size == 16384);
+  CHECK(call("pread", {static_cast<std::uint64_t>(fd), h2g(contents.data()),
+                         static_cast<std::uint64_t>(contents.size()), 0}) ==
+          static_cast<std::int64_t>(contents.size()));
+  CHECK(contents == initial);
+  // Bionic returns the positive Linux error number, never -1/errno.
+  CHECK(call("posix_fallocate", {static_cast<std::uint64_t>(fd), 0, 0}) == err::einval);
+  CHECK(call("posix_fallocate", {static_cast<std::uint64_t>(fd), 0,
+                                   static_cast<std::uint64_t>(-1)}) == err::einval);
+  CHECK(call("posix_fallocate", {static_cast<std::uint64_t>(fd),
+                                   static_cast<std::uint64_t>(-1), 1}) == err::einval);
+  CHECK(call("posix_fallocate", {static_cast<std::uint64_t>(999999), 0, 1}) == err::ebadf);
+  // A range whose end overflows a 64-bit offset is rejected without growing
+  // or truncating the file.
+  constexpr auto huge = std::numeric_limits<std::int64_t>::max() - 8;
+  REQUIRE(call("fstat", {static_cast<GuestAddr>(fd), h2g(&stat)}) == 0);
+  const auto before = stat.size;
+  CHECK(call("posix_fallocate", {static_cast<std::uint64_t>(fd), huge, 16}) == err::efbig);
+  REQUIRE(call("fstat", {static_cast<GuestAddr>(fd), h2g(&stat)}) == 0);
+  CHECK(stat.size == before);
+  CHECK(call("posix_fallocate", {static_cast<std::uint64_t>(fd), 0, 1}) == 0);
+  CHECK(call("close", {static_cast<std::uint64_t>(fd)}) == 0);
+  const auto readonly = call("open", {h2g(path.c_str()), 0, 0});
+  REQUIRE(readonly >= 0);
+  CHECK(call("posix_fallocate", {static_cast<std::uint64_t>(readonly), 0, 1}) == err::ebadf);
+  CHECK(call("close", {static_cast<std::uint64_t>(readonly)}) == 0);
 }
 
 TEST_CASE("libc B: guest stat and dirent layouts") {

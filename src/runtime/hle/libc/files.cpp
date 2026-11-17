@@ -152,6 +152,16 @@ int truncate_file(const char* p, std::int64_t size) {
   close_fd(fd);
   return r;
 }
+// bionic posix_fallocate returns the error number directly, unlike the
+// -1/errno convention of most libc file calls.
+int posix_fallocate_file(int fd, std::int64_t offset, std::int64_t length) {
+  if (offset < 0 || length <= 0) return err::einval;
+  auto f = FdTable::get().file(fd);
+  if (!f) return err::ebadf;
+  if (!(f->flags.load() & 3)) return err::ebadf;
+  int r = f->allocate_range(offset, length);
+  return r < 0 ? -r : 0;
+}
 int stat_file(const char* p, Stat* s) { return static_cast<int>(result(path_stat(p, s))); }
 int lstat_file(const char* p, Stat* s) {
   return static_cast<int>(result(path_stat(p, s, at_cwd, false)));
@@ -728,6 +738,8 @@ void register_files(HleLibrary& lib) {
   B("fdatasync", sync_file);
   B("ftruncate", truncate_fd);
   B("ftruncate64", truncate_fd);
+  B("posix_fallocate", posix_fallocate_file);
+  B("posix_fallocate64", posix_fallocate_file);
   B("truncate", truncate_file);
   B("truncate64", truncate_file);
   B("stat", stat_file);

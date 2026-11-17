@@ -104,6 +104,9 @@ public class Window {
   public View getDecorView() {
     return decor;
   }
+  public WindowInsetsController getInsetsController() {
+    return decor.getWindowInsetsController();
+  }
   public View peekDecorView() {
     return decor;
   }

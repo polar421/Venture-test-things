@@ -21,6 +21,11 @@ def modules():
 
 
 class JreModulesTest(unittest.TestCase):
+    def test_ec_crypto_module_is_in_the_jre(self):
+        # SunEC is not a Java package import; without this module JSSE offers
+        # FFDHE-only ClientHellos, which some TLS edges reject.
+        self.assertIn("jdk.crypto.ec", modules())
+
     def test_framework_jdk_packages_are_in_the_jre(self):
         shipped, missing = modules(), {}
         for source in FRAMEWORK.rglob("*.java"):

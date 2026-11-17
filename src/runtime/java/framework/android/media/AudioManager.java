@@ -28,6 +28,11 @@ public class AudioManager {
   private boolean microphoneMute, speakerphone;
   private AudioDeviceInfo communicationDevice;
   private OnAudioFocusChangeListener focus;
+  public interface OnCommunicationDeviceChangedListener {
+    void onCommunicationDeviceChanged(AudioDeviceInfo device);
+  }
+  private final java.util.Map<OnCommunicationDeviceChangedListener, java.util.concurrent.Executor>
+      communicationListeners = new java.util.IdentityHashMap<>();
   private record Route(int id, boolean input, String name) {}
   private static final java.util.concurrent.ScheduledExecutorService inventoryWorker =
       java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
@@ -191,16 +196,23 @@ public class AudioManager {
   public java.util.List<AudioDeviceInfo> getAvailableCommunicationDevices() {
     return java.util.List.of(getDevices(GET_DEVICES_OUTPUTS));
   }
-  public synchronized boolean setCommunicationDevice(AudioDeviceInfo device) {
+  public boolean setCommunicationDevice(AudioDeviceInfo device) {
     java.util.Objects.requireNonNull(device);
     if (!device.isSink())
       throw new IllegalArgumentException("Invalid device: " + device);
-    for (var available : getAvailableCommunicationDevices())
-      if (available.getId() == device.getId()) {
-        communicationDevice = available;
-        return true;
-      }
-    return false;
+    AudioDeviceInfo selected = null;
+    synchronized (this) {
+      for (var available : getAvailableCommunicationDevices())
+        if (available.getId() == device.getId()) {
+          communicationDevice = available;
+          selected = available;
+          break;
+        }
+    }
+    if (selected == null)
+      return false;
+    dispatchCommunicationDeviceChanged(selected);
+    return true;
   }
   public synchronized AudioDeviceInfo getCommunicationDevice() {
     if (communicationDevice != null)
@@ -208,8 +220,33 @@ public class AudioManager {
     var devices = getAvailableCommunicationDevices();
     return devices.isEmpty() ? null : devices.get(0);
   }
-  public synchronized void clearCommunicationDevice() {
-    communicationDevice = null;
+  public void clearCommunicationDevice() {
+    boolean changed;
+    synchronized (this) {
+      changed = communicationDevice != null;
+      communicationDevice = null;
+    }
+    if (changed)
+      dispatchCommunicationDeviceChanged(null);
+  }
+  public synchronized void addOnCommunicationDeviceChangedListener(
+      java.util.concurrent.Executor executor, OnCommunicationDeviceChangedListener listener) {
+    java.util.Objects.requireNonNull(executor);
+    java.util.Objects.requireNonNull(listener);
+    communicationListeners.put(listener, executor);
+  }
+  public synchronized void removeOnCommunicationDeviceChangedListener(
+      OnCommunicationDeviceChangedListener listener) {
+    communicationListeners.remove(listener);
+  }
+  private void dispatchCommunicationDeviceChanged(AudioDeviceInfo device) {
+    java.util.List<java.util.Map.Entry<OnCommunicationDeviceChangedListener,
+                                           java.util.concurrent.Executor>> snapshot;
+    synchronized (this) {
+      snapshot = new java.util.ArrayList<>(communicationListeners.entrySet());
+    }
+    for (var entry : snapshot)
+      entry.getValue().execute(() -> entry.getKey().onCommunicationDeviceChanged(device));
   }
   public synchronized int requestAudioFocus(
       OnAudioFocusChangeListener l, int stream, int duration) {

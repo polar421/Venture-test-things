@@ -78,6 +78,12 @@ class DiskFile final : public File {
     return 0;
   }
   int truncate(std::int64_t n) override { return ::ftruncate(fd_, n) ? native_error() : 0; }
+  int allocate_range(std::int64_t offset, std::int64_t length) override {
+    if (offset < 0 || length <= 0) return -err::einval;
+    if (readonly_) return -err::ebadf;
+    const int r = ::posix_fallocate(fd_, offset, length);
+    return r ? -r : 0;
+  }
   int sync() override { return ::fsync(fd_) ? native_error() : 0; }
   int chmod(std::uint32_t mode) override {
     if (readonly_) return -err::erofs;

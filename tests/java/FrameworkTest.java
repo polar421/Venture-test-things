@@ -731,6 +731,15 @@ public final class FrameworkTest {
         && audio.abandonAudioFocusRequest(focus) == android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED
         && audio.generateAudioSessionId() != audio.generateAudioSessionId(), "audio focus requests and session ids");
     check(audio.getActiveRecordingConfigurations().isEmpty(), "no recordings are active without an AudioRecord");
+    check(android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION) == null,
+        "Venture exposes no system ringtone store");
+    boolean invalidRingtoneType = false;
+    try {
+      android.media.RingtoneManager.getDefaultUri(8);
+    } catch (IllegalArgumentException expected) {
+      invalidRingtoneType = true;
+    }
+    check(invalidRingtoneType, "invalid ringtone types are rejected like Android");
     var horizon = context.createPackageContext("com.oculus.horizon", 0);
     check(horizon.getPackageName().equals("com.oculus.horizon")
         && Class.forName("com.oculus.avatar.loader.EntryPoint", true, horizon.getClassLoader())
@@ -1138,6 +1147,14 @@ public final class FrameworkTest {
           && voice.getCommunicationDevice().getId() == 7
           && !voice.setCommunicationDevice(new android.media.AudioDeviceInfo(8, false, "gone")),
           "voice chat sets its mode and communication device");
+      var routed = new java.util.concurrent.atomic.AtomicReference<android.media.AudioDeviceInfo>();
+      var routedListener = (android.media.AudioManager.OnCommunicationDeviceChangedListener) routed::set;
+      voice.addOnCommunicationDeviceChangedListener(Runnable::run, routedListener);
+      check(voice.setCommunicationDevice(communication.get(0)) && routed.get() != null
+          && routed.get().getId() == 7, "communication-device changes reach listeners");
+      voice.clearCommunicationDevice();
+      check(routed.get() == null, "clearing the communication device reports null");
+      voice.removeOnCommunicationDeviceChangedListener(routedListener);
     } finally {
       memoryHostField.set(null, memoryOldHost);
     }
@@ -3143,6 +3160,73 @@ public final class FrameworkTest {
     builder.setInsets(android.view.WindowInsets.Type.ime(), android.graphics.Insets.NONE);
     check(built.getInsets(android.view.WindowInsets.Type.ime()).bottom == 80
         && built.isVisible(android.view.WindowInsets.Type.ime()), "insets Builder snapshots typed values and visibility");
+    var insetsWindow = new android.view.Window(new android.content.Context());
+    var insetsController = insetsWindow.getInsetsController();
+    check(insetsController != null && insetsController == insetsWindow.getInsetsController(),
+        "window exposes a stable insets controller");
+    var listenerType = Class.forName(
+        "android.view.WindowInsetsController$OnControllableInsetsChangedListener");
+    check(listenerType.isInterface(), "controllable insets listener is an interface");
+    check(listenerType.getMethod("onControllableInsetsChanged",
+        android.view.WindowInsetsController.class, int.class).getReturnType() == void.class,
+        "controllable insets callback signature");
+    check(android.view.WindowInsetsController.class.getMethod(
+        "addOnControllableInsetsChangedListener", listenerType) != null
+        && android.view.WindowInsetsController.class.getMethod(
+            "removeOnControllableInsetsChangedListener", listenerType) != null,
+        "controllable insets registration methods");
+    var insetsMasks = new ArrayList<Integer>();
+    var insetsControllers = new ArrayList<android.view.WindowInsetsController>();
+    android.view.WindowInsetsController.OnControllableInsetsChangedListener insetsListener =
+        (callbackController, mask) -> {
+          insetsControllers.add(callbackController);
+          insetsMasks.add(mask);
+        };
+    insetsController.addOnControllableInsetsChangedListener(insetsListener);
+    check(insetsMasks.equals(List.of(0)) && insetsControllers.get(0) == insetsController,
+        "listener receives the current controllable mask on registration");
+    var setControllableInsets = insetsController.getClass().getDeclaredMethod(
+        "setControllableInsets", int.class);
+    setControllableInsets.setAccessible(true);
+    setControllableInsets.invoke(insetsController, android.view.WindowInsets.Type.systemBars());
+    check(insetsMasks.equals(List.of(0, android.view.WindowInsets.Type.systemBars())),
+        "listener receives a controllable mask change");
+    setControllableInsets.invoke(insetsController, android.view.WindowInsets.Type.systemBars());
+    check(insetsMasks.size() == 2, "an unchanged controllable mask is not redelivered");
+    var secondInsetsMasks = new ArrayList<Integer>();
+    android.view.WindowInsetsController.OnControllableInsetsChangedListener secondInsetsListener =
+        (callbackController, mask) -> secondInsetsMasks.add(mask);
+    insetsController.addOnControllableInsetsChangedListener(secondInsetsListener);
+    check(secondInsetsMasks.equals(List.of(android.view.WindowInsets.Type.systemBars())),
+        "second listener receives the current mask");
+    setControllableInsets.invoke(insetsController, android.view.WindowInsets.Type.ime());
+    check(insetsMasks.equals(List.of(0, android.view.WindowInsets.Type.systemBars(),
+            android.view.WindowInsets.Type.ime()))
+        && secondInsetsMasks.equals(List.of(android.view.WindowInsets.Type.systemBars(),
+            android.view.WindowInsets.Type.ime())),
+        "all registered listeners receive mask changes");
+    insetsController.removeOnControllableInsetsChangedListener(secondInsetsListener);
+    setControllableInsets.invoke(insetsController, 0);
+    check(insetsMasks.equals(List.of(0, android.view.WindowInsets.Type.systemBars(),
+            android.view.WindowInsets.Type.ime(), 0))
+        && secondInsetsMasks.equals(List.of(android.view.WindowInsets.Type.systemBars(),
+            android.view.WindowInsets.Type.ime())),
+        "removed listener no longer receives callbacks");
+    boolean nullAddRejected = false;
+    try {
+      insetsController.addOnControllableInsetsChangedListener(
+          (android.view.WindowInsetsController.OnControllableInsetsChangedListener) null);
+    } catch (NullPointerException expected) {
+      nullAddRejected = true;
+    }
+    boolean nullRemoveRejected = false;
+    try {
+      insetsController.removeOnControllableInsetsChangedListener(
+          (android.view.WindowInsetsController.OnControllableInsetsChangedListener) null);
+    } catch (NullPointerException expected) {
+      nullRemoveRejected = true;
+    }
+    check(nullAddRejected && nullRemoveRejected, "null insets listeners are rejected");
     boolean managerAbsent = false;
     try { Class.forName("com.google.android.play.core.assetpacks.AssetPackManager"); }
     catch (ClassNotFoundException e) { managerAbsent = true; }

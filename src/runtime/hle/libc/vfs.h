@@ -149,6 +149,17 @@ class File {
     return 0;
   }
   virtual int truncate(std::int64_t) { return -err::einval; }
+  // posix_fallocate: make offset..offset+length allocated without changing
+  // existing bytes. The default extends the file for in-memory files; disk
+  // files override this with the host allocator.
+  virtual int allocate_range(std::int64_t offset, std::int64_t length) {
+    if (offset < 0 || length <= 0) return -err::einval;
+    if (offset > INT64_MAX - length) return -err::efbig;
+    Stat current{};
+    if (int r = stat(&current)) return r;
+    const auto end = offset + length;
+    return end <= current.size ? 0 : truncate(end);
+  }
   // Called before a writable shared mapping: a file that defers becoming
   // writable (an expansion entry) does so here.
   virtual int prepare_write() { return 0; }

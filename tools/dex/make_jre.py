@@ -10,8 +10,10 @@ from convert_apk import DEPS, java_tool
 # {Unsafe,Signal,SignalHandler}. java.xml supports framework resource parsers.
 # java.desktop backs the framework's android.graphics Bitmap/BitmapFactory/Paint
 # (java.awt.image, javax.imageio, java.awt.Font); the JVM runs it headless.
+# jdk.crypto.ec supplies SunEC. Without it the JRE negotiates FFDHE only (no
+# X25519/ECDHE/ECDSA), which Roblox's edge rejects with handshake_failure.
 # No java.sql or java.net.http.
-MODULES = "java.base,java.logging,java.xml,java.desktop,jdk.unsupported"
+MODULES = "java.base,java.logging,java.xml,java.desktop,jdk.unsupported,jdk.crypto.ec"
 
 
 def main():
