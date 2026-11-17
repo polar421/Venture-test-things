@@ -6,6 +6,7 @@
 #include "core/syscall.h"
 #include "core/address_space.h"
 #include "hle/libc/system_fonts.h"
+#include "hle/libc/system_ca.h"
 #include <algorithm>
 #include <array>
 #include <cstdlib>
@@ -434,6 +435,35 @@ TEST_CASE("libc B: /system/fonts lists installed host fonts under a Quest's name
   else
     MESSAGE("No CJK font on this host");
   fonts::set_catalog(real);
+}
+TEST_CASE("libc B: /system/etc/security/cacerts copies host roots, skipping broken entries") {
+  namespace ca = venture::hle::libc::system_ca;
+  const auto root = std::filesystem::path(VENTURE_LIBC_B_TEST_ROOT) / "host-ca";
+  const auto guest = std::filesystem::path(VENTURE_LIBC_B_TEST_ROOT) / "guest-ca";
+  std::filesystem::remove_all(root);
+  std::filesystem::remove_all(guest);
+  std::filesystem::create_directories(root);
+#ifndef _WIN32
+  // A dangling root must not stop the entries after it from being copied.
+  std::filesystem::create_symlink(root / "missing-cert", root / "baadf00d.0");
+#endif
+  paths::atomic_write(root / "a94d09e5.0", "root a");
+  paths::atomic_write(root / "cd8c0d63.1", "root b");
+  paths::atomic_write(root / "not-a-root.pem", "ignored");
+  std::filesystem::create_directory(root / "deadbeef.0");
+  std::filesystem::create_directories(guest);
+  paths::atomic_write(guest / "a94d09e5.0", "guest root");
+  CHECK(ca::copy_store(root, guest) == 1);
+  CHECK(paths::read(guest / "a94d09e5.0") == "guest root");
+  CHECK(paths::read(guest / "cd8c0d63.1") == "root b");
+  CHECK_FALSE(std::filesystem::exists(guest / "not-a-root.pem"));
+  CHECK_FALSE(std::filesystem::exists(guest / "deadbeef.0"));
+#ifndef _WIN32
+  CHECK_FALSE(std::filesystem::exists(guest / "baadf00d.0"));
+#endif
+  // Existing guest roots are kept, so a game's store is never rewritten.
+  CHECK(ca::copy_store(root, guest) == 0);
+  CHECK(ca::copy_store(root / "missing", guest) == 0);
 }
 TEST_CASE("libc B: stdio and legacy FILE array") {
   Thread thread;

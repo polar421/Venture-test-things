@@ -13,6 +13,7 @@
 #include <numbers>
 #include <set>
 #include <tuple>
+#include <utility>
 
 namespace venture::hle::openxr {
 namespace {

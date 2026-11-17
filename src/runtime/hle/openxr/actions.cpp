@@ -1,6 +1,7 @@
 #include "xr/menu_chord.h"
 #include "xr/grip_toggle.h"
 #include <algorithm>
+#include <array>
 #include <optional>
 #include <set>
 #include <string>
@@ -22,12 +23,17 @@ std::string path_string(XrInstance instance, XrPath path) {
 }
 } // namespace
 XrResult create_action_for_host(XrActionSet set, const XrActionCreateInfo* info, XrAction* out) {
-  if (info->actionType != XR_ACTION_TYPE_VIBRATION_OUTPUT || info->countSubactionPaths)
+  const bool aggregate_output = info->actionType == XR_ACTION_TYPE_VIBRATION_OUTPUT && !info->countSubactionPaths;
+  const bool aggregate_input = info->actionType != XR_ACTION_TYPE_VIBRATION_OUTPUT && !info->countSubactionPaths;
+  if (!aggregate_output && !aggregate_input)
     return host_call<PFN_xrCreateAction, "xrCreateAction">(set, info, out);
-  // An aggregate output still targets all its bound devices with XR_NULL_PATH.
-  // Explicit native subpaths additionally support SDKs that select a hand at
-  // delivery time. Retain all core roots, including head and gamepad; changing
-  // this to a hand-only list would restrict otherwise valid aggregate bindings.
+  // An aggregate action targets all its bound devices with XR_NULL_PATH. Some
+  // mobile SDKs (notably OVRPlugin/Unity) then read that same action with a
+  // hand subaction path, which OpenXR rejects unless the action was created with
+  // that path. Declare every core root on the native action so those reads are
+  // valid; the guest's original declaration and bindings stay unchanged.
+  // This is also the existing aggregate-vibration behavior, where SDKs select a
+  // hand at delivery time.
   std::array<XrPath, 4> roots{};
   constexpr const char* names[]{"/user/head", "/user/hand/left", "/user/hand/right", "/user/gamepad"};
   for (std::size_t i = 0; i < roots.size(); ++i) {
@@ -43,7 +49,7 @@ XrResult create_action_for_host(XrActionSet set, const XrActionCreateInfo* info,
     // standard roots. Never turn an API error into successful vibration.
     return host_call<PFN_xrCreateAction, "xrCreateAction">(set, info, out);
   }
-  if (XR_SUCCEEDED(result))
+  if (XR_SUCCEEDED(result) && aggregate_output)
     state().actions[*out].native_haptic_subactions.assign(roots.begin(), roots.end());
   return result;
 }

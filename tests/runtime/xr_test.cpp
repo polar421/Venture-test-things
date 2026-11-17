@@ -194,8 +194,11 @@ TEST_CASE("Aggregate vibration falls back when native subaction roots are unsupp
   CHECK(fixture.counts == std::vector<std::uint32_t>{1});
   fixture.counts.clear();info.countSubactionPaths = 0;info.subactionPaths = nullptr;
   info.actionType = XR_ACTION_TYPE_BOOLEAN_INPUT;
+  // Aggregate input actions first declare the standard roots so a later
+  // per-hand read is accepted; this host rejects paths, so creation retries the
+  // original aggregate declaration.
   REQUIRE(venture::hle::openxr::guest::create_action_for_host(fixture.set, &info, &action) == XR_SUCCESS);
-  CHECK(fixture.counts == std::vector<std::uint32_t>{0});
+  CHECK(fixture.counts == std::vector<std::uint32_t>{4, 0});
   REQUIRE(::xrDestroyAction(action) == XR_SUCCESS);
 }
 TEST_CASE("XR forwarding slots retain results and refresh after instance recreation") {

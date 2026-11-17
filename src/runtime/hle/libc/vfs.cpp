@@ -3,6 +3,7 @@
 #include "vfs.h"
 #include "file_io_trace.h"
 #include "system_fonts.h"
+#include "system_ca.h"
 #include "common/log.h"
 #include "core/process_paths.h"
 #include "core/process_image.h"
@@ -202,6 +203,8 @@ int resolve_path(std::string_view path, int dirfd, MappedPath* out) {
   // Android's /etc is a link to /system/etc (Unity reads /etc/fonts.xml).
   if (below(p, "/etc")) p = "/system" + p;
   auto& c = process_config();
+  // Android's native TLS clients read hashed roots from this directory.
+  if (below(p, system_ca::directory)) system_ca::ensure(c.data_dir);
   if (proc_directory(p, nullptr))
     out->device = 5;
   else if (p == "/dev/null")
